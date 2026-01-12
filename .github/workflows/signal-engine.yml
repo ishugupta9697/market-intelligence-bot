@@ -1,7 +1,9 @@
-name: Signal Engine
+name: Signal Engine (5-min Monitor)
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
 
 jobs:
   signal-engine:
@@ -17,7 +19,7 @@ jobs:
           python-version: '3.10'
 
       - name: Install dependencies
-        run: pip install yfinance requests
+        run: pip install yfinance requests pandas
 
       - name: Run signal engine
         env:
