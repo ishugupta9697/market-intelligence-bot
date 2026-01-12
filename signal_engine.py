@@ -5,6 +5,8 @@ import json
 from datetime import datetime, timedelta
 import pandas as pd
 
+from performance_tracker import log_trade
+
 # ================= TELEGRAM =================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
@@ -18,13 +20,12 @@ def send_telegram(message):
 utc_now = datetime.utcnow()
 ist_now = utc_now + timedelta(hours=5, minutes=30)
 
-weekday = ist_now.weekday()  # Mon=0
+weekday = ist_now.weekday()
 current_time = ist_now.time()
 
 MARKET_OPEN = datetime.strptime("09:20", "%H:%M").time()
 MARKET_CLOSE = datetime.strptime("15:10", "%H:%M").time()
 
-# Exit silently if market is closed
 if weekday > 4 or current_time < MARKET_OPEN or current_time > MARKET_CLOSE:
     exit()
 
@@ -88,9 +89,7 @@ for name, trade in list(state.items()):
     trailing_active = trade["trailing_active"]
     highest = trade["highest"]
 
-    data = yf.download(
-        ticker, period="2mo", interval="5m", progress=False, auto_adjust=True
-    )
+    data = yf.download(ticker, period="2mo", interval="5m", progress=False, auto_adjust=True)
     if data.empty:
         continue
 
@@ -107,55 +106,36 @@ for name, trade in list(state.items()):
     rsi_last = float(rsi.iloc[-1])
     atr_last = float(atr.iloc[-1])
 
-    # Update highest price
     if price > highest:
         highest = price
 
-    # Activate trailing at 1R
     if not trailing_active and price >= entry + risk:
         stop_loss = entry
         trailing_active = True
-        send_telegram(
-            f"🔄 TRAILING ACTIVATED — {name}\n"
-            f"Time: {time_now}\n"
-            f"New Stop-Loss: ₹{round(stop_loss,2)} (Breakeven)"
-        )
+        send_telegram(f"🔄 TRAILING ACTIVATED — {name}\nTime: {time_now}\nNew SL: ₹{round(stop_loss,2)}")
 
-    # Trailing logic after activation
     if trailing_active:
         trail_sl = max(stop_loss, highest - (1.2 * atr_last))
         if trail_sl > stop_loss:
             stop_loss = trail_sl
-            send_telegram(
-                f"🔄 TRAILING UPDATED — {name}\n"
-                f"Time: {time_now}\n"
-                f"New Stop-Loss: ₹{round(stop_loss,2)}"
-            )
+            send_telegram(f"🔄 TRAILING UPDATED — {name}\nTime: {time_now}\nNew SL: ₹{round(stop_loss,2)}")
 
-    # Exit conditions
+    # EXIT: Stop-loss
     if price <= stop_loss:
-        send_telegram(
-            f"🔴 EXIT — {name}\n"
-            f"Time: {time_now}\n"
-            f"Exit at: ₹{round(price,2)}\n"
-            f"Reason: Stop-Loss hit"
-        )
+        send_telegram(f"🔴 EXIT — {name}\nTime: {time_now}\nExit: ₹{round(price,2)}\nReason: SL hit")
+        log_trade(name, entry, price, risk, "SL hit")
         del state[name]
         save_state(state)
         continue
 
+    # EXIT: Momentum weakness
     if rsi_last < 40 or price < ema20_last:
-        send_telegram(
-            f"⚠️ EXIT — {name}\n"
-            f"Time: {time_now}\n"
-            f"Exit at: ₹{round(price,2)}\n"
-            f"Reason: Momentum weakening"
-        )
+        send_telegram(f"⚠️ EXIT — {name}\nTime: {time_now}\nExit: ₹{round(price,2)}\nReason: Momentum weak")
+        log_trade(name, entry, price, risk, "Momentum weak")
         del state[name]
         save_state(state)
         continue
 
-    # Save updated trade state
     state[name].update({
         "stop_loss": stop_loss,
         "trailing_active": trailing_active,
@@ -164,18 +144,14 @@ for name, trade in list(state.items()):
 
 save_state(state)
 
-# ================= ENTRY ENGINE (NEW TRADES) =================
+# ================= ENTRY ENGINE (UNCHANGED) =================
 signals_sent = 0
 
 for name, ticker in symbols.items():
-    if name in state:
+    if name in state or len(state) >= 3:
         continue
-    if len(state) >= 3:
-        break
 
-    data = yf.download(
-        ticker, period="3mo", interval="1d", progress=False, auto_adjust=True
-    )
+    data = yf.download(ticker, period="3mo", interval="1d", progress=False, auto_adjust=True)
     if data.empty or len(data) < 50:
         continue
 
@@ -200,19 +176,14 @@ for name, ticker in symbols.items():
     score = 0
     reasons = []
 
-    if entry > last_ema20 and entry > last_ema50:
-        score += 25; reasons.append("Price above EMA 20 & 50")
-    if 45 <= last_rsi <= 65:
-        score += 20; reasons.append(f"RSI healthy ({round(last_rsi,1)})")
-    if float(macd.iloc[-1]) > float(macd_signal.iloc[-1]):
-        score += 25; reasons.append("MACD bullish crossover")
-    if last_ema20 > last_ema50:
-        score += 15; reasons.append("Trend alignment positive")
+    if entry > last_ema20 and entry > last_ema50: score += 25
+    if 45 <= last_rsi <= 65: score += 20
+    if float(macd.iloc[-1]) > float(macd_signal.iloc[-1]): score += 25
+    if last_ema20 > last_ema50: score += 15
 
     candle_range = float(high.iloc[-1] - low.iloc[-1])
     avg_range = float((high - low).rolling(10).mean().iloc[-1])
-    if candle_range <= 1.5 * avg_range:
-        score += 15; reasons.append("No abnormal volatility")
+    if candle_range <= 1.5 * avg_range: score += 15
 
     if last_rsi > 75 or last_rsi < 25:
         continue
@@ -234,13 +205,9 @@ for name, ticker in symbols.items():
 
         send_telegram(
             "📈 BUY SIGNAL — HIGH CONFIDENCE\n"
-            f"{name}\n"
-            f"Time: {time_now}\n\n"
-            f"Entry: ₹{round(entry,2)}\n"
-            f"Stop-Loss: ₹{round(stop_loss,2)}\n"
-            f"Target: ₹{round(target,2)}\n\n"
-            f"Confidence: {score}%\n"
-            "Risk Rules:\n• Risk ≤ 1% capital\n• Trailing at 1R"
+            f"{name}\nTime: {time_now}\n\n"
+            f"Entry: ₹{round(entry,2)}\nSL: ₹{round(stop_loss,2)}\nTarget: ₹{round(target,2)}\n"
+            f"Confidence: {score}%"
         )
         signals_sent += 1
 
