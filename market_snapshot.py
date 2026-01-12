@@ -1,16 +1,21 @@
 import yfinance as yf
 import requests
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
+# Telegram credentials
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-def send_telegram(msg):
+def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": msg}
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": message
+    }
     requests.post(url, json=payload)
 
+# Market symbols
 symbols = {
     "NIFTY 50": "^NSEI",
     "RELIANCE": "RELIANCE.NS",
@@ -27,8 +32,12 @@ symbols = {
     "USD-INR": "USDINR=X"
 }
 
+# IST time using reliable UTC offset
+utc_now = datetime.utcnow()
+ist_now = utc_now + timedelta(hours=5, minutes=30)
+current_time = ist_now.strftime("%d %b %Y | %I:%M %p IST")
+
 lines = []
-now = datetime.now().strftime("%d %b %Y | %I:%M %p")
 
 for name, ticker in symbols.items():
     data = yf.Ticker(ticker).history(period="1d")
@@ -38,6 +47,10 @@ for name, ticker in symbols.items():
     else:
         lines.append(f"{name}: data unavailable")
 
-message = "📊 Market Snapshot\n" + now + "\n\n" + "\n".join(lines)
+message = (
+    "📊 Market Snapshot\n"
+    f"{current_time}\n\n" +
+    "\n".join(lines)
+)
 
 send_telegram(message)
