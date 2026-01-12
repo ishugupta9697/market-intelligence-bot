@@ -1,6 +1,7 @@
 import yfinance as yf
 import requests
 import os
+import json
 from datetime import datetime, timedelta
 import pandas as pd
 
@@ -29,6 +30,21 @@ if weekday > 4 or current_time < MARKET_OPEN or current_time > MARKET_CLOSE:
 
 time_now = ist_now.strftime("%d %b %Y | %I:%M %p IST")
 
+# ================= FILE STATE =================
+STATE_FILE = "active_trades.json"
+
+def load_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_state(state):
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f, indent=2)
+
+state = load_state()
+
 # ================= ASSETS =================
 symbols = {
     "RELIANCE": "RELIANCE.NS",
@@ -54,18 +70,112 @@ def calculate_rsi(series, period=14):
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
+def atr_from_ohlc(high, low, close, period=14):
+    tr = pd.concat([
+        high - low,
+        (high - close.shift()).abs(),
+        (low - close.shift()).abs()
+    ], axis=1).max(axis=1)
+    return tr.rolling(period).mean()
+
+# ================= MONITOR ACTIVE TRADES =================
+for name, trade in list(state.items()):
+    ticker = trade["ticker"]
+    entry = trade["entry"]
+    stop_loss = trade["stop_loss"]
+    target = trade["target"]
+    risk = trade["risk"]
+    trailing_active = trade["trailing_active"]
+    highest = trade["highest"]
+
+    data = yf.download(
+        ticker, period="2mo", interval="5m", progress=False, auto_adjust=True
+    )
+    if data.empty:
+        continue
+
+    close = data["Close"].astype(float)
+    high = data["High"].astype(float)
+    low = data["Low"].astype(float)
+
+    ema20 = close.ewm(span=20).mean()
+    rsi = calculate_rsi(close)
+    atr = atr_from_ohlc(high, low, close)
+
+    price = float(close.iloc[-1])
+    ema20_last = float(ema20.iloc[-1])
+    rsi_last = float(rsi.iloc[-1])
+    atr_last = float(atr.iloc[-1])
+
+    # Update highest price
+    if price > highest:
+        highest = price
+
+    # Activate trailing at 1R
+    if not trailing_active and price >= entry + risk:
+        stop_loss = entry
+        trailing_active = True
+        send_telegram(
+            f"🔄 TRAILING ACTIVATED — {name}\n"
+            f"Time: {time_now}\n"
+            f"New Stop-Loss: ₹{round(stop_loss,2)} (Breakeven)"
+        )
+
+    # Trailing logic after activation
+    if trailing_active:
+        trail_sl = max(stop_loss, highest - (1.2 * atr_last))
+        if trail_sl > stop_loss:
+            stop_loss = trail_sl
+            send_telegram(
+                f"🔄 TRAILING UPDATED — {name}\n"
+                f"Time: {time_now}\n"
+                f"New Stop-Loss: ₹{round(stop_loss,2)}"
+            )
+
+    # Exit conditions
+    if price <= stop_loss:
+        send_telegram(
+            f"🔴 EXIT — {name}\n"
+            f"Time: {time_now}\n"
+            f"Exit at: ₹{round(price,2)}\n"
+            f"Reason: Stop-Loss hit"
+        )
+        del state[name]
+        save_state(state)
+        continue
+
+    if rsi_last < 40 or price < ema20_last:
+        send_telegram(
+            f"⚠️ EXIT — {name}\n"
+            f"Time: {time_now}\n"
+            f"Exit at: ₹{round(price,2)}\n"
+            f"Reason: Momentum weakening"
+        )
+        del state[name]
+        save_state(state)
+        continue
+
+    # Save updated trade state
+    state[name].update({
+        "stop_loss": stop_loss,
+        "trailing_active": trailing_active,
+        "highest": highest
+    })
+
+save_state(state)
+
+# ================= ENTRY ENGINE (NEW TRADES) =================
 signals_sent = 0
 
-# ================= SIGNAL ENGINE =================
 for name, ticker in symbols.items():
-    data = yf.download(
-        ticker,
-        period="3mo",
-        interval="1d",
-        progress=False,
-        auto_adjust=True
-    )
+    if name in state:
+        continue
+    if len(state) >= 3:
+        break
 
+    data = yf.download(
+        ticker, period="3mo", interval="1d", progress=False, auto_adjust=True
+    )
     if data.empty or len(data) < 50:
         continue
 
@@ -73,35 +183,65 @@ for name, ticker in symbols.items():
     high = data["High"].astype(float)
     low = data["Low"].astype(float)
 
-    # Indicators
     ema20 = close.ewm(span=20).mean()
     ema50 = close.ewm(span=50).mean()
     rsi = calculate_rsi(close)
+    atr = atr_from_ohlc(high, low, close)
 
-    macd = close.ewm(span=12).mean() - close.ewm(span=26).mean()
-    macd_signal = macd.ewm(span=9).mean()
-
-    # ATR (14)
-    tr = pd.concat([
-        high - low,
-        (high - close.shift()).abs(),
-        (low - close.shift()).abs()
-    ], axis=1).max(axis=1)
-    atr = tr.rolling(14).mean()
-
-    # Latest values
     entry = float(close.iloc[-1])
     last_rsi = float(rsi.iloc[-1])
     last_ema20 = float(ema20.iloc[-1])
     last_ema50 = float(ema50.iloc[-1])
-    last_macd = float(macd.iloc[-1])
-    last_macd_signal = float(macd_signal.iloc[-1])
     last_atr = float(atr.iloc[-1])
+
+    macd = close.ewm(span=12).mean() - close.ewm(span=26).mean()
+    macd_signal = macd.ewm(span=9).mean()
 
     score = 0
     reasons = []
 
-    # Conditions
     if entry > last_ema20 and entry > last_ema50:
-        score += 25
-        reason
+        score += 25; reasons.append("Price above EMA 20 & 50")
+    if 45 <= last_rsi <= 65:
+        score += 20; reasons.append(f"RSI healthy ({round(last_rsi,1)})")
+    if float(macd.iloc[-1]) > float(macd_signal.iloc[-1]):
+        score += 25; reasons.append("MACD bullish crossover")
+    if last_ema20 > last_ema50:
+        score += 15; reasons.append("Trend alignment positive")
+
+    candle_range = float(high.iloc[-1] - low.iloc[-1])
+    avg_range = float((high - low).rolling(10).mean().iloc[-1])
+    if candle_range <= 1.5 * avg_range:
+        score += 15; reasons.append("No abnormal volatility")
+
+    if last_rsi > 75 or last_rsi < 25:
+        continue
+
+    if score >= 80 and signals_sent < 3:
+        stop_loss = entry - (1.2 * last_atr)
+        risk = entry - stop_loss
+        target = entry + (1.8 * risk)
+
+        state[name] = {
+            "ticker": ticker,
+            "entry": entry,
+            "stop_loss": stop_loss,
+            "target": target,
+            "risk": risk,
+            "trailing_active": False,
+            "highest": entry
+        }
+
+        send_telegram(
+            "📈 BUY SIGNAL — HIGH CONFIDENCE\n"
+            f"{name}\n"
+            f"Time: {time_now}\n\n"
+            f"Entry: ₹{round(entry,2)}\n"
+            f"Stop-Loss: ₹{round(stop_loss,2)}\n"
+            f"Target: ₹{round(target,2)}\n\n"
+            f"Confidence: {score}%\n"
+            "Risk Rules:\n• Risk ≤ 1% capital\n• Trailing at 1R"
+        )
+        signals_sent += 1
+
+save_state(state)
