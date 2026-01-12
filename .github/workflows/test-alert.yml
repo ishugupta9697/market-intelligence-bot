@@ -1,46 +1,26 @@
-import yfinance as yf
-import requests
-import os
-from datetime import datetime
-import pytz
+name: Market Snapshot
 
-# Telegram credentials
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+on:
+  workflow_dispatch:
 
-def send_telegram(message):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": message
-    }
-    requests.post(url, json=payload)
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
 
-# Market symbols
-symbols = {
-    "NIFTY 50": "^NSEI",
-    "RELIANCE": "RELIANCE.NS",
-    "TCS": "TCS.NS",
-    "INFY": "INFY.NS",
-    "HDFCBANK": "HDFCBANK.NS",
-    "ICICIBANK": "ICICIBANK.NS",
-    "SBIN": "SBIN.NS",
-    "ITC": "ITC.NS",
-    "LT": "LT.NS",
-    "AXISBANK": "AXISBANK.NS",
-    "MARUTI": "MARUTI.NS",
-    "GOLD ETF": "GOLDBEES.NS",
-    "USD-INR": "USDINR=X"
-}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-# IST Time
-ist = pytz.timezone("Asia/Kolkata")
-current_time = datetime.now(ist).strftime("%d %b %Y | %I:%M %p IST")
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
 
-lines = []
+      - name: Install dependencies
+        run: pip install yfinance requests pytz
 
-for name, ticker in symbols.items():
-    data = yf.Ticker(ticker).history(period="1d")
-    if not data.empty:
-        price = round(data["Close"].iloc[-1], 2)
-        lines.append(f"{name}: {price
+      - name: Send market snapshot
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python market_snapshot.py
