@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timedelta
 import pandas as pd
 
-# ===================== TELEGRAM =====================
+# ================= TELEGRAM =================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
@@ -13,25 +13,23 @@ def send_telegram(message):
     payload = {"chat_id": CHAT_ID, "text": message}
     requests.post(url, json=payload)
 
-# ===================== MARKET TIME CONTROL =====================
-
-# IST time (manual UTC offset – reliable)
+# ================= MARKET TIME CONTROL =================
 utc_now = datetime.utcnow()
 ist_now = utc_now + timedelta(hours=5, minutes=30)
 
-# Day & time checks
-weekday = ist_now.weekday()  # Monday=0, Sunday=6
+weekday = ist_now.weekday()  # Mon=0
 current_time = ist_now.time()
 
 MARKET_OPEN = datetime.strptime("09:20", "%H:%M").time()
 MARKET_CLOSE = datetime.strptime("15:10", "%H:%M").time()
 
-# Block execution if market is closed
+# Exit silently if market is closed
 if weekday > 4 or current_time < MARKET_OPEN or current_time > MARKET_CLOSE:
-    # Optional: silent exit (recommended)
     exit()
 
-# ===================== ASSETS =====================
+time_now = ist_now.strftime("%d %b %Y | %I:%M %p IST")
+
+# ================= ASSETS =================
 symbols = {
     "RELIANCE": "RELIANCE.NS",
     "TCS": "TCS.NS",
@@ -46,9 +44,7 @@ symbols = {
     "GOLD ETF": "GOLDBEES.NS"
 }
 
-time_now = ist_now.strftime("%d %b %Y | %I:%M %p IST")
-
-# ===================== INDICATORS =====================
+# ================= INDICATORS =================
 def calculate_rsi(series, period=14):
     delta = series.diff()
     gain = delta.clip(lower=0)
@@ -60,7 +56,7 @@ def calculate_rsi(series, period=14):
 
 signals_sent = 0
 
-# ===================== SIGNAL ENGINE =====================
+# ================= SIGNAL ENGINE =================
 for name, ticker in symbols.items():
     data = yf.download(
         ticker,
@@ -77,6 +73,7 @@ for name, ticker in symbols.items():
     high = data["High"].astype(float)
     low = data["Low"].astype(float)
 
+    # Indicators
     ema20 = close.ewm(span=20).mean()
     ema50 = close.ewm(span=50).mean()
     rsi = calculate_rsi(close)
@@ -84,50 +81,27 @@ for name, ticker in symbols.items():
     macd = close.ewm(span=12).mean() - close.ewm(span=26).mean()
     macd_signal = macd.ewm(span=9).mean()
 
-    last_close = float(close.iloc[-1])
+    # ATR (14)
+    tr = pd.concat([
+        high - low,
+        (high - close.shift()).abs(),
+        (low - close.shift()).abs()
+    ], axis=1).max(axis=1)
+    atr = tr.rolling(14).mean()
+
+    # Latest values
+    entry = float(close.iloc[-1])
+    last_rsi = float(rsi.iloc[-1])
     last_ema20 = float(ema20.iloc[-1])
     last_ema50 = float(ema50.iloc[-1])
-    last_rsi = float(rsi.iloc[-1])
     last_macd = float(macd.iloc[-1])
     last_macd_signal = float(macd_signal.iloc[-1])
+    last_atr = float(atr.iloc[-1])
 
     score = 0
     reasons = []
 
-    if last_close > last_ema20 and last_close > last_ema50:
+    # Conditions
+    if entry > last_ema20 and entry > last_ema50:
         score += 25
-        reasons.append("Price above EMA 20 & 50")
-
-    if 45 <= last_rsi <= 65:
-        score += 20
-        reasons.append(f"RSI healthy ({round(last_rsi,1)})")
-
-    if last_macd > last_macd_signal:
-        score += 25
-        reasons.append("MACD bullish crossover")
-
-    if last_ema20 > last_ema50:
-        score += 15
-        reasons.append("Trend alignment positive")
-
-    candle_range = float(high.iloc[-1] - low.iloc[-1])
-    avg_range = float((high - low).rolling(10).mean().iloc[-1])
-
-    if candle_range <= 1.5 * avg_range:
-        score += 15
-        reasons.append("No abnormal volatility")
-
-    if last_rsi > 75 or last_rsi < 25:
-        continue
-
-    if score >= 80 and signals_sent < 3:
-        message = (
-            "📈 HIGH-CONFIDENCE BUY SIGNAL\n"
-            f"{name}\n"
-            f"Time: {time_now}\n\n"
-            f"Confidence: {score}%\n\n"
-            "Why:\n• " + "\n• ".join(reasons) +
-            "\n\nRisk Note:\n• Use strict stop-loss\n• Risk ≤ 1% capital"
-        )
-        send_telegram(message)
-        signals_sent += 1
+        reason
