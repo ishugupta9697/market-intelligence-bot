@@ -2,27 +2,34 @@ name: Market Heartbeat (Pre & Post)
 
 on:
   schedule:
-    - cron: "45 3 * * 1-5"   # 9:15 AM IST
-    - cron: "0 10 * * 1-5"   # 3:30 PM IST
+    # 9:15 AM IST → 03:45 UTC
+    - cron: "45 3 * * 1-5"
+
+    # 3:40 PM IST → 10:10 UTC
+    - cron: "10 10 * * 1-5"
+
   workflow_dispatch:
 
 jobs:
   heartbeat:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
-      - name: Install deps
-        run: pip install yfinance requests
+      - name: Install dependencies
+        run: |
+          pip install requests
 
-      - name: Run heartbeat
+      - name: Run Market Heartbeat
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python market_heartbeat.py
+        run: |
+          python market_heartbeat.py
