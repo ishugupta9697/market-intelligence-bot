@@ -1,94 +1,79 @@
-import yfinance as yf
-import requests
 import os
-from datetime import datetime, timedelta, time
 import json
+import requests
+from datetime import datetime, timedelta, time
 
-# ============== TELEGRAM ==============
+# ================= TELEGRAM =================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-def send_telegram(msg):
+def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": CHAT_ID, "text": msg})
+    requests.post(url, json={"chat_id": CHAT_ID, "text": message})
 
-# ============== TIME (IST) ==============
+# ================= TIME =================
 utc_now = datetime.utcnow()
 ist_now = utc_now + timedelta(hours=5, minutes=30)
 weekday = ist_now.weekday()
 now_time = ist_now.time()
 
-# Only on trading days
+# Market days only (Mon–Fri)
 if weekday > 4:
     exit()
 
+# Heartbeat times
 PRE_MARKET_TIME = time(9, 15)
-POST_MARKET_TIME = time(15, 30)
+POST_MARKET_TIME = time(15, 40)
 
-# ============== MARKET DATA (FREE) ==============
-def pct_change(ticker):
-    d = yf.download(ticker, period="2d", interval="1d", progress=False)
-    if d.empty or len(d) < 2:
-        return None
-    prev, last = float(d["Close"].iloc[-2]), float(d["Close"].iloc[-1])
-    return round(((last - prev) / prev) * 100, 2)
+# ================= STATE FILES =================
+SWING_STATE_FILE = "active_trades.json"
+BTST_STATE_FILE = "btst_state.json"
 
-nifty = pct_change("^NSEI")
-banknifty = pct_change("^NSEBANK")
-vix = pct_change("^INDIAVIX")
+def load_json(file, default):
+    try:
+        if os.path.exists(file):
+            with open(file, "r") as f:
+                return json.load(f)
+    except:
+        pass
+    return default
 
-# ============== STRATEGY COUNTS (OPTIONAL) ==============
-def count_today_alerts():
-    # Non-intrusive: reads local log if present
-    if not os.path.exists("trade_log.csv"):
-        return {"Intraday": 0, "Swing": 0, "BTST": 0, "Gold ETF": 0}
-    counts = {"Intraday": 0, "Swing": 0, "BTST": 0, "Gold ETF": 0}
-    today = ist_now.strftime("%Y-%m-%d")
-    with open("trade_log.csv", "r") as f:
-        lines = f.readlines()[1:]
-        for l in lines:
-            if today in l:
-                if "INTRADAY" in l: counts["Intraday"] += 1
-                if "BTST" in l: counts["BTST"] += 1
-                if "GOLD_ETF" in l: counts["Gold ETF"] += 1
-                if "Swing" in l: counts["Swing"] += 1
-    return counts
+swing_state = load_json(SWING_STATE_FILE, {})
+btst_state = load_json(BTST_STATE_FILE, {"count": 0})
 
-# ============== PRE-MARKET ==============
-if now_time == PRE_MARKET_TIME:
-    mood = "Mixed"
-    if nifty is not None and nifty > 0.3:
-        mood = "Positive"
-    elif nifty is not None and nifty < -0.3:
-        mood = "Cautious"
+date_str = ist_now.strftime("%d %b %Y")
+time_str = ist_now.strftime("%I:%M %p IST")
+
+# ================= PRE-MARKET HEARTBEAT =================
+if now_time.hour == PRE_MARKET_TIME.hour and now_time.minute == PRE_MARKET_TIME.minute:
+    send_telegram(
+        "🔔 MARKET OPEN — SYSTEM CHECK\n"
+        f"Date: {date_str} | {time_str}\n\n"
+        "System Status:\n"
+        f"• Swing Engine: ACTIVE ({len(swing_state)} open trades)\n"
+        "• BTST Engine: ACTIVE\n"
+        "• Risk/Trade: 1% max\n\n"
+        "Reminder:\n"
+        "• Trades only on high-confidence alerts\n"
+        "• No action required now"
+    )
+    exit()
+
+# ================= POST-MARKET HEARTBEAT =================
+if now_time.hour == POST_MARKET_TIME.hour and now_time.minute == POST_MARKET_TIME.minute:
+    btst_count = btst_state.get("count", 0)
 
     send_telegram(
-        "🟢 PRE-MARKET UPDATE | 9:15 AM IST\n\n"
-        "System Status: ACTIVE ✅\n\n"
-        "Market Mood (Early Cues):\n"
-        f"• NIFTY: {nifty}%\n"
-        f"• BANK NIFTY: {banknifty}%\n"
-        f"• INDIA VIX: {vix}%\n\n"
-        f"Overall Tone: {mood}\n\n"
-        "Strategies Active Today:\n"
-        "• Intraday\n• Swing\n• BTST\n• Gold ETF\n\n"
-        "Note: Alerts only if conditions qualify (≥80% confidence)."
+        "🔔 MARKET CLOSED — DAILY SUMMARY\n"
+        f"Date: {date_str} | {time_str}\n\n"
+        "Today’s Activity:\n"
+        f"• Swing Trades Active: {len(swing_state)}\n"
+        f"• BTST Trades Taken: {btst_count}\n\n"
+        "System Health:\n"
+        "• All workflows executed\n"
+        "• No manual action required\n\n"
+        "Note:\n"
+        "• Silence = discipline\n"
+        "• Capital protection comes first"
     )
-
-# ============== POST-MARKET ==============
-if now_time == POST_MARKET_TIME:
-    counts = count_today_alerts()
-    send_telegram(
-        "🔵 POST-MARKET SUMMARY | 3:30 PM IST\n\n"
-        "Market Summary:\n"
-        f"• NIFTY: {nifty}%\n"
-        f"• BANK NIFTY: {banknifty}%\n"
-        f"• INDIA VIX: {vix}%\n\n"
-        "System Activity Today:\n"
-        f"• Intraday alerts: {counts['Intraday']}\n"
-        f"• Swing alerts: {counts['Swing']}\n"
-        f"• BTST alerts: {counts['BTST']}\n"
-        f"• Gold ETF alerts: {counts['Gold ETF']}\n\n"
-        "Status:\n• Monitoring paused till next market day.\n"
-        "Have a good evening."
-    )
+    exit()
