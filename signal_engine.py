@@ -122,7 +122,7 @@ def atr_from_ohlc(high, low, close, period=14):
     ], axis=1).max(axis=1)
     return tr.rolling(period).mean()
 
-# ================= INTRADAY (UNCHANGED) =================
+# ================= INTRADAY =================
 if now_time <= INTRADAY_ENTRY_CUTOFF and intraday_count["count"] < 3:
     for name, ticker in equity_symbols.items():
         if name in state:
@@ -139,18 +139,21 @@ if now_time <= INTRADAY_ENTRY_CUTOFF and intraday_count["count"] < 3:
 
         ema9 = close.ewm(span=9).mean()
         ema21 = close.ewm(span=21).mean()
-        rsi_val = rsi(close)
+        rsi_series = rsi(close)
         vwap = ((high + low + close) / 3 * volume).cumsum() / volume.cumsum()
 
         entry = float(close.iloc[-1])
-        last_rsi = float(rsi_val.iloc[-1])
+        ema9_val = float(ema9.iloc[-1])
+        ema21_val = float(ema21.iloc[-1])
+        vwap_val = float(vwap.iloc[-1])
+        last_rsi = float(rsi_series.iloc[-1])
 
         score = 0
         reasons = []
 
-        if entry > ema9.iloc[-1] > ema21.iloc[-1]:
+        if entry > ema9_val and ema9_val > ema21_val:
             score += 40; reasons.append("EMA 9 > EMA 21")
-        if entry > vwap.iloc[-1]:
+        if entry > vwap_val:
             score += 30; reasons.append("Above VWAP")
         if 50 <= last_rsi <= 65:
             score += 30; reasons.append(f"RSI healthy ({round(last_rsi,1)})")
@@ -178,7 +181,7 @@ if now_time <= INTRADAY_ENTRY_CUTOFF and intraday_count["count"] < 3:
             save_json(STATE_FILE, state)
             save_json(DAY_FILE, intraday_count)
 
-# ================= BTST (UNCHANGED) =================
+# ================= BTST =================
 if now_time >= BTST_ENTRY_START:
     for name, ticker in equity_symbols.items():
         if name in state:
@@ -194,17 +197,19 @@ if now_time >= BTST_ENTRY_START:
 
         ema20 = close.ewm(span=20).mean()
         ema50 = close.ewm(span=50).mean()
-        rsi_val = rsi(close)
+        rsi_series = rsi(close)
         atr = atr_from_ohlc(high, low, close)
 
         entry = float(close.iloc[-1])
-        last_rsi = float(rsi_val.iloc[-1])
+        ema20_val = float(ema20.iloc[-1])
+        ema50_val = float(ema50.iloc[-1])
+        last_rsi = float(rsi_series.iloc[-1])
         last_atr = float(atr.iloc[-1])
 
         score = 0
         reasons = []
 
-        if entry > ema20.iloc[-1] and entry > ema50.iloc[-1]:
+        if entry > ema20_val and entry > ema50_val:
             score += 40; reasons.append("Strong EOD close above EMA 20 & 50")
         if 50 <= last_rsi <= 65:
             score += 30; reasons.append(f"RSI healthy ({round(last_rsi,1)})")
@@ -236,7 +241,7 @@ if now_time >= BTST_ENTRY_START:
 
             save_json(STATE_FILE, state)
 
-# ================= GOLD ETF ENTRY (NEW) =================
+# ================= GOLD ETF =================
 for name, ticker in gold_etfs.items():
     if name in state:
         continue
@@ -251,17 +256,19 @@ for name, ticker in gold_etfs.items():
 
     ema20 = close.ewm(span=20).mean()
     ema50 = close.ewm(span=50).mean()
-    rsi_val = rsi(close)
+    rsi_series = rsi(close)
     atr = atr_from_ohlc(high, low, close)
 
     entry = float(close.iloc[-1])
-    last_rsi = float(rsi_val.iloc[-1])
+    ema20_val = float(ema20.iloc[-1])
+    ema50_val = float(ema50.iloc[-1])
+    last_rsi = float(rsi_series.iloc[-1])
     last_atr = float(atr.iloc[-1])
 
     score = 0
     reasons = []
 
-    if entry > ema20.iloc[-1] and entry > ema50.iloc[-1]:
+    if entry > ema20_val and entry > ema50_val:
         score += 40; reasons.append("Price above EMA 20 & 50")
     if 45 <= last_rsi <= 65:
         score += 30; reasons.append(f"RSI healthy ({round(last_rsi,1)})")
@@ -272,7 +279,7 @@ for name, ticker in gold_etfs.items():
         score += 30; reasons.append("Stable gold volatility")
 
     if score >= 80:
-        sl = entry - (1.8 * last_atr)       # wider SL for gold
+        sl = entry - (1.8 * last_atr)
         target = entry + (2.0 * (entry - sl))
 
         state[name] = {
